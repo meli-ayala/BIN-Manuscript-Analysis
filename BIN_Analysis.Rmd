@@ -1,0 +1,412 @@
+---
+title: "BIN_Analysis"
+output: html_document
+date: "2026-06-01"
+---
+
+# Word Rec Task
+## Bilinguals Timecourse
+
+There are 16 different trial types for bilinguals:
+
+-   quiet (8): stroller, hand, car, foot, perro, nariz, leche, ojo
+
+-   noise (8): hand, foot, stroller, car, perro, nariz, ojo, leche
+
+Object pairs:
+
+-   ojo/perro
+-   car/foot
+-   stroller/hand
+-   nariz/leche
+
+```{r, include=FALSE}
+library(tidyverse)
+
+#Reading in the timecourse output and plotting the bilingual timecourse in R.
+btime <- read_csv(
+  "bilingual_timecourse.csv",
+  col_names = TRUE
+)
+
+btime <- btime %>%
+  rename(condition = 1)
+
+btime_long <- btime %>%
+  pivot_longer(
+    cols = -condition,
+    names_to = "time",
+    values_to = "looking_time"
+  ) %>%
+  mutate(
+    time = as.numeric(time)
+  )
+```
+
+Bilinguals Quiet v. Noise plot. The dashed line at 1.2 seconds indicates the time at which the target word onset occurred.
+
+```{r, include=FALSE}
+#Reformatting the data so we can look at timecourse across quiet and noise conditions only.
+btime_long <- btime_long %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    )
+  )
+```
+
+```{r, include=FALSE}
+btime_plot <- btime_long %>%
+  group_by(time, quiet_noise) %>%
+  summarise(
+    mean_looking = mean(looking_time, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r, warning=FALSE}
+ggplot(btime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+   title = "Bilingual Timecourse N=14",
+   x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+Timecourse plot across all 16 conditions.
+
+```{r, warning=FALSE}
+ggplot(btime_long, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Bilingual Timecourse N=14",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+```
+
+I want to just plot all the quiet conditions in one plot because it's really messy to look at all 16 trial types.
+
+```{r, warning=FALSE}
+btime_quiet <- btime_long %>%
+  filter(str_starts(condition, "quiet_"))
+
+ggplot(btime_quiet, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Bilingual Quiet Conditions Timecourse",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+
+```
+
+Now just the noise conditions:
+
+```{r, warning=FALSE}
+btime_noise <- btime_long %>%
+  filter(str_starts(condition, "noise_"))
+
+ggplot(btime_noise, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Bilingual Noise Conditions Timecourse",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+```
+
+Ok let's look at this object by object:
+
+```{r, warning=FALSE}
+btime_object <- btime_long %>%
+  mutate(object = str_remove(condition, "^(quiet_|noise_)"))
+
+ggplot(btime_object, aes(x = time, y = looking_time, color = quiet_noise)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  facet_wrap(~ object, ncol = 4) +
+  labs(
+    title = "Bilingual Timecourse by Object (Quiet vs Noise)",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition Type"
+  ) +
+  theme_classic()
+```
+
+## Bilinguals Accuracy
+
+-   This data reflects looking time data for a 2 second window (from 2-4 seconds)
+
+-   After looking at the individual object plots (see above), I decided to remove the objects foot, hand, and leche because of low accuracy in the quiet (and noise) conditions.
+
+```{r, include=FALSE}
+bwindow <- read.csv("bwindow.csv", header=TRUE,na.strings=c(""))
+
+#remove rows based on NA in Participant column (empty rows)
+bwindow <- bwindow %>% drop_na(Participant)
+
+#remove trials that we don't want based on the name
+bwindow <- bwindow[!bwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4", "quiet_eye", "noise_eye", "quiet_nose", "noise_nose", "quiet_milk", "noise_milk", "quiet_dog", "noise_dog"),]
+
+bwindow <- bwindow %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(Trial.Type, "quiet") ~ "Quiet",
+      str_starts(Trial.Type, "noise") ~ "Noise"
+    )
+  )
+
+rownames(bwindow) <- NULL
+```
+
+This table shows accuracy in the quiet and noise conditions (includes 10 different trial types - 5 objects named once in each condition).
+
+```{r, warning=FALSE}
+bwindow %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+## Monolinguals Timecourse
+
+There are 16 different trial types for monlinguals:
+
+-   quiet (8): stroller, hand, car, foot, eye, nose, dog, milk
+
+-   noise (8): hand, foot, stroller, car, eye, nose, milk, dog
+
+Object pairs:
+
+-   eye/dog
+-   car/foot
+-   stroller/hand
+-   milk/nose
+
+```{r, include=FALSE}
+mtime <- read_csv(
+  "monolingual_timecourse.csv",
+  col_names = TRUE
+)
+
+mtime <- mtime %>%
+  rename(condition = 1)
+
+mtime_long <- mtime %>%
+  pivot_longer(
+    cols = -condition,
+    names_to = "time",
+    values_to = "looking_time"
+  ) %>%
+  mutate(
+    time = as.numeric(time)
+  )
+```
+
+Monolinguals Quiet v. Noise plot. The dashed line at 1.2 seconds indicates the time at which the target word onset occurred.
+
+```{r, include=FALSE}
+#Reformatting the data so we can look at timecourse across quiet and noise conditions only.
+mtime_long <- mtime_long %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    )
+  )
+```
+
+```{r, include=FALSE}
+mtime_plot <- mtime_long %>%
+  group_by(time, quiet_noise) %>%
+  summarise(
+    mean_looking = mean(looking_time, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r, warning=FALSE}
+ggplot(mtime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+   title = "Monolingual Timecourse N=23",
+   x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+Timecourse plot across all 16 conditions.
+
+```{r, warning=FALSE}
+ggplot(mtime_long, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Monolingual Timecourse N=23",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+```
+
+I want to just plot all the quiet conditions in one plot because it's really messy to look at all 16 trial types.
+
+```{r, warning=FALSE}
+mtime_quiet <- mtime_long %>%
+  filter(str_starts(condition, "quiet_"))
+
+ggplot(mtime_quiet, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Monolingual Quiet Conditions Timecourse",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+```
+
+Now just the noise conditions:
+
+```{r, warning=FALSE}
+mtime_noise <- mtime_long %>%
+  filter(str_starts(condition, "noise_"))
+
+ggplot(mtime_noise, aes(x = time, y = looking_time, color = condition)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+    title = "Monolingual Noise Conditions Timecourse",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition"
+  ) +
+  theme_classic()
+```
+
+Ok let's look at this object by object:
+
+```{r, warning=FALSE}
+mtime_object <- mtime_long %>%
+  mutate(object = str_remove(condition, "^(quiet_|noise_)"))
+
+ggplot(mtime_object, aes(x = time, y = looking_time, color = quiet_noise)) +
+  geom_line(linewidth = 1) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  facet_wrap(~ object, ncol = 4) +
+  labs(
+    title = "Monolingual Timecourse by Object (Quiet vs Noise)",
+    x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Condition Type"
+  ) +
+  theme_classic()
+```
+
+## Monolinguals Accuracy
+
+-   I ran the same window for monolinguals (2-4 seconds)
+
+-   I am going to remove the same 3 words that I did for the bilinguals (hand, foot, milk)
+
+```{r, include=FALSE}
+mwindow <- read.csv("mwindow.csv", header=TRUE,na.strings=c(""))
+
+#remove rows based on NA in Participant column (empty rows)
+mwindow <- mwindow %>% drop_na(Participant)
+
+#remove trials that we don't want based on the name
+mwindow <- mwindow[!mwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4", "quiet_ojo","noise_perro", "noise_nariz", "quiet_perro", "quiet_nariz", "noise_ojo", "quiet_leche", "noise_leche"),]
+
+mwindow <- mwindow %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(Trial.Type, "quiet") ~ "Quiet",
+      str_starts(Trial.Type, "noise") ~ "Noise"
+    )
+  )
+
+rownames(mwindow) <- NULL
+```
+
+```{r, warning=FALSE}
+mwindow %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
