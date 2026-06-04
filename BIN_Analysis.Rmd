@@ -410,3 +410,45 @@ mwindow %>%
     .groups = "drop"
   )
 ```
+# Habituation Task
+```{r}
+library(dplyr)
+hab <- read.csv("hab.csv")
+age <- read.csv("age.csv")
+lena <- read.csv("lena.csv")
+mcdi <- read.csv("mcdi.csv")
+
+#78 participants (including V1 and V2 data points) with hab data
+hab <- hab %>%
+  left_join(age, by = "Participant")
+
+hab <- hab %>%
+  left_join(lena, by = "Participant")
+
+#which kids are missing lena data
+hab %>%
+  filter(is.na(noise_sum)) %>%
+  pull(Participant)
+
+#22 kids 
+#"M05ES"     "M08SA"     "M43EW"     "M47JJ"     "M48DZ"    
+# "M46CC"     "M08SA_V2"  "M24JB_V2"  "B04DR"     "B06JR"     "B10KG"    
+#"B17YT"     "B22JR"     "B24EBR"    "B23RF"     "B28APF"    "B29NRP"   
+#"B31ZR"     "B34ES"     "B26GB"     "B32NF"     "B12KRM_V2"
+
+hab <- hab %>%
+  left_join(mcdi, by = "Participant")
+
+#which kids are missing mcdi data
+hab %>%
+  filter(is.na(mcdi)) %>%
+  pull(Participant)
+
+#31 kids 
+#"M11BLP"    "M22AS"     "M41GG"     "M43EW"     "M45DA"     "M47JJ"    
+#"M48DZ"     "M46CC"     "M12RO_V2"  "M13CY_V2"  "B05ET"     "B10KG"    
+#"B16LR"     "B17YT"     "B18LS"     "B21HM"     "B22JR"     "B24EBR"   
+#"B23RF"     "B27KDS"    "B28APF"    "B30MR"     "B29NRP"    "B31ZR"    
+#"B34ES"     "B26GB"     "B32NF"     "B33KLH"    "B05ET_V2"  "B11ARF_V2"
+#"B12KRM_V2"
+```
