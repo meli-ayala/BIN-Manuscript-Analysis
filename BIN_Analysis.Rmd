@@ -25,11 +25,10 @@ hab %>%
   filter(is.na(noise_sum)) %>%
   pull(Participant)
 
-#22 kids 
-#"M05ES"     "M08SA"     "M43EW"     "M47JJ"     "M48DZ"    
-# "M46CC"     "M08SA_V2"  "M24JB_V2"  "B04DR"     "B06JR"     "B10KG"    
-#"B17YT"     "B22JR"     "B24EBR"    "B23RF"     "B28APF"    "B29NRP"   
-#"B31ZR"     "B34ES"     "B26GB"     "B32NF"     "B12KRM_V2"
+#18 kids 
+# [1] "M05ES"     "M08SA"     "M43EW"     "M47JJ"     "M48DZ"     "M08SA_V2" 
+# [7] "M24JB_V2"  "B04DR"     "B06JR"     "B10KG"     "B17YT"     "B22JR"    
+# [13] "B24EBR"    "B23RF"     "B29NRP"    "B31ZR"     "B32NF"     "B12KRM_V2"
 
 hab <- hab %>%
   left_join(mcdi, by = "Participant")
@@ -57,20 +56,6 @@ hab <- hab %>%
     )
   )
 ```
-## Plotting Novelty Response Score
-```{r}
-library(ggplot2)
-
-ggplot(hab, aes(x = language, y = nov_score)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.1, alpha = 0.7) +
-  labs(
-    x = "Language Group",
-    y = "Novelty Response Score",
-    title = "Novelty Response Scores by Language Group"
-  ) +
-  theme_classic()
-```
 
 ```{r}
 # creating age group bins
@@ -87,6 +72,80 @@ hab <- hab %>%
       levels = c("8–12.9", "13–18.9", "19–26.9")
     )
   )
+
+# age distribution (how many kids we have at each age in months)
+# 8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 
+# 9 13  4  3  4  6  2  4  1  7  8  9  2  1  1  1  1  2 
+
+ggplot(hab, aes(x = age)) +
+  geom_histogram(binwidth = 1) +
+  geom_rug() +
+  theme_classic()
+```
+
+```{r}
+# seeing how many kids have a V2 data point for habit data 
+hab$visit <- ifelse(grepl("_V2$", hab$Participant), "V2", "V1")
+
+table(hab$language, hab$visit)
+
+#            V1 V2
+#bilingual   28  3
+#monolingual 32 15
+```
+
+## Stats - linear regression (full sample)
+```{r}
+library(lme4)
+
+m1 <- lm(nov_score ~ age * language, data = hab)
+summary(m1)
+
+m2 <- lm(hab_trials ~ age * language, data = hab)
+summary(m2)
+
+m3 <- lm(nov1 ~ age * language, data = hab)
+summary(m3)
+```
+```{r}
+# subsetting data to run separate analyses
+mono <- hab %>% filter(language == "monolingual")
+bi   <- hab %>% filter(language == "bilingual")
+```
+
+```{r}
+m4 <- lm(nov_score ~ tv, data = bi)
+summary(m4)
+
+m5 <- lm(nov_score ~ noise_sum, data = mono)
+summary(m5)
+
+m6 <- lm(hab_trials ~ tv, data = bi)
+summary(m6)
+
+m7 <- lm(hab_trials ~ noise_sum, data = mono)
+summary(m7)
+
+m8 <- lm(nov1 ~ tv, data = bi)
+summary(m8)
+
+m9 <- lm(nov1 ~ noise_sum, data = mono)
+summary(m9)
+```
+
+## Plotting Novelty Response Score
+```{r}
+library(ggplot2)
+
+ggplot(hab, aes(x = language, y = nov_score)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.7) +
+  labs(
+    x = "Language Group",
+    y = "Novelty Response Score",
+    title = "Novelty Response Scores by Language Group"
+  ) +
+  theme_classic()
 ```
 
 ```{r}
