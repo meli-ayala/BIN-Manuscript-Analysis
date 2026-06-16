@@ -4,7 +4,7 @@ output: html_document
 date: "2026-06-01"
 ---
 # Habituation Task
-## Data Cleaning
+## Data Cleaning (updated 6/16/26)
 ```{r}
 library(dplyr)
 hab <- read.csv("hab.csv")
@@ -12,7 +12,7 @@ age <- read.csv("age.csv")
 lena <- read.csv("lena.csv")
 mcdi <- read.csv("mcdi.csv")
 
-#78 participants (including V1 and V2 data points) with hab data
+#79 participants (including V1 and V2 data points) with hab data
 #this only includes kids who did habituate
 hab <- hab %>%
   left_join(age, by = "Participant")
@@ -25,10 +25,11 @@ hab %>%
   filter(is.na(noise_sum)) %>%
   pull(Participant)
 
-#18 kids 
-# [1] "M05ES"     "M08SA"     "M43EW"     "M47JJ"     "M48DZ"     "M08SA_V2" 
-# [7] "M24JB_V2"  "B04DR"     "B06JR"     "B10KG"     "B17YT"     "B22JR"    
-# [13] "B24EBR"    "B23RF"     "B29NRP"    "B31ZR"     "B32NF"     "B12KRM_V2"
+#19 kids 
+#[1] "M05ES"     "M08SA"     "M43EW"     "M47JJ"     "M48DZ"    
+#[6] "M08SA_V2"  "M24JB_V2"  "M37JD_V2"  "B04DR"     "B06JR"    
+#[11] "B10KG"     "B17YT"     "B22JR"     "B24EBR"    "B23RF"    
+#[16] "B29NRP"    "B31ZR"     "B32NF"     "B12KRM_V2"
 
 hab <- hab %>%
   left_join(mcdi, by = "Participant")
@@ -38,13 +39,14 @@ hab %>%
   filter(is.na(mcdi)) %>%
   pull(Participant)
 
-#31 kids 
-#"M11BLP"    "M22AS"     "M41GG"     "M43EW"     "M45DA"     "M47JJ"    
-#"M48DZ"     "M46CC"     "M12RO_V2"  "M13CY_V2"  "B05ET"     "B10KG"    
-#"B16LR"     "B17YT"     "B18LS"     "B21HM"     "B22JR"     "B24EBR"   
-#"B23RF"     "B27KDS"    "B28APF"    "B30MR"     "B29NRP"    "B31ZR"    
-#"B34ES"     "B26GB"     "B32NF"     "B33KLH"    "B05ET_V2"  "B11ARF_V2"
-#"B12KRM_V2"
+#32 kids 
+#[1] "M11BLP"    "M22AS"     "M41GG"     "M43EW"     "M45DA"    
+#[6] "M47JJ"     "M48DZ"     "M46CC"     "M12RO_V2"  "M13CY_V2" 
+#[11] "M37JD_V2"  "B05ET"     "B10KG"     "B16LR"     "B17YT"    
+#[16] "B18LS"     "B21HM"     "B22JR"     "B24EBR"    "B23RF"    
+#[21] "B27KDS"    "B28APF"    "B30MR"     "B29NRP"    "B31ZR"    
+#[26] "B34ES"     "B26GB"     "B32NF"     "B33KLH"    "B05ET_V2" 
+#[31] "B11ARF_V2" "B12KRM_V2"
 
 # add a language column
 hab <- hab %>%
@@ -73,10 +75,8 @@ hab <- hab %>%
     )
   )
 
-# age distribution (how many kids we have at each age in months)
-# 8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 
-# 9 13  4  3  4  6  2  4  1  7  8  9  2  1  1  1  1  2 
 
+library(ggplot2)
 ggplot(hab, aes(x = age)) +
   geom_histogram(binwidth = 1) +
   geom_rug() +
@@ -91,7 +91,7 @@ table(hab$language, hab$visit)
 
 #            V1 V2
 #bilingual   28  3
-#monolingual 32 15
+#monolingual 32 16
 ```
 
 ## Stats - linear regression (full sample)
@@ -116,6 +116,7 @@ bi   <- hab %>% filter(language == "bilingual")
 ```{r}
 m4 <- lm(nov_score ~ tv, data = bi)
 summary(m4)
+# tv main effect p=0.0525 for bilingual sample
 
 m5 <- lm(nov_score ~ noise_sum, data = mono)
 summary(m5)
