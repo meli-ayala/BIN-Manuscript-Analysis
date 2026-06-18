@@ -3,6 +3,424 @@ title: "BIN_Analysis"
 output: html_document
 date: "2026-06-01"
 ---
+# Word Recognition Task
+## Bilinguals Timecourse (Updated 6/17/26)
+
+There are 16 different trial types for bilinguals:
+
+-   quiet (8): stroller, hand, car, foot, perro, nariz, leche, ojo
+
+-   noise (8): hand, foot, stroller, car, perro, nariz, ojo, leche
+
+Object pairs:
+
+- ojo/perro
+- car/foot
+- stroller/hand
+- nariz/leche
+
+Notes from analysis 6/17/26: Only including bilinguals over 12 months old (N=24)
+```{r, include=FALSE}
+library(tidyverse)
+
+#Reading in the timecourse output and plotting the bilingual timecourse in R.
+btime <- read_csv(
+  "bilingual_timecourse.csv",
+  col_names = TRUE
+)
+
+btime <- btime %>%
+  rename(condition = 1)
+
+btime_long <- btime %>%
+  pivot_longer(
+    cols = -condition,
+    names_to = "time",
+    values_to = "looking_time"
+  ) %>%
+  mutate(
+    time = as.numeric(time)
+  )
+```
+
+Bilinguals Quiet v. Noise plot. The dashed line at 1.2 seconds indicates the time at which the target word onset occurred.
+
+```{r, include=FALSE}
+#Reformatting the data so we can look at timecourse across quiet and noise conditions only.
+btime_long <- btime_long %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    )
+  )
+```
+
+```{r, include=FALSE}
+btime_plot <- btime_long %>%
+  group_by(time, quiet_noise) %>%
+  summarise(
+    mean_looking = mean(looking_time, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r, warning=FALSE}
+ggplot(btime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+   title = "Bilingual Timecourse N=24",
+   x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+## Bilinguals Accuracy (Updated 6/18/26)
+
+-   This data reflects looking time data for a 4.2 second window from 2 seconds until the end of the trial (6.2 seconds)
+- This window was decided mostly based on the monolingual timecourse plot below 
+
+```{r, include=FALSE}
+bwindow <- read.csv("bwindow.csv", header=TRUE,na.strings=c(""))
+
+#remove rows based on NA in Participant column (empty rows)
+bwindow <- bwindow %>% drop_na(Participant)
+
+#remove trials that we don't want based on the name
+bwindow <- bwindow[!bwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4","quiet_eye", "noise_eye", "noise_nose", "quiet_nose", "noise_milk", "noise_dog", "quiet_dog", "quiet_milk"),]
+
+bwindow <- bwindow %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(Trial.Type, "quiet") ~ "Quiet",
+      str_starts(Trial.Type, "noise") ~ "Noise"
+    )
+  )
+
+rownames(bwindow) <- NULL
+```
+
+```{r, warning=FALSE}
+bwindow %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# quiet_noise mean_accuracy
+# Noise               0.528
+# Quiet               0.521
+```
+```{r}
+#imputing data -> impute NaN values with the means of the type accuracy for that trial type (using simplified quiet_noise variable)
+imputed_b <- bwindow %>%
+  group_by(quiet_noise) %>%
+  mutate(Type.Accuracy = ifelse(is.na(Type.Accuracy), mean(Type.Accuracy, na.rm = TRUE), Type.Accuracy))
+```
+
+```{r}
+# make z scores in order to check for outliers
+imputed_b$z <- ave(imputed_b$Type.Accuracy, imputed_b$quiet_noise, FUN = function(x) (x - mean(x)) / sd(x))
+
+#check for outliers
+outliers_b <- imputed_b[abs(imputed_b$z) > 1.5, ]
+
+#changed z score cut off to 1.5 to get rid of trials with accuracy of 0
+#now there are 93 outlier trials 
+# there were 0 outlier trials when z score cut off was set at 2
+```
+
+```{r}
+#remove outliers
+imputed_b <- imputed_b[!paste(imputed_b$Participant, imputed_b$quiet_noise, imputed_b$Type.Accuracy) %in% paste(outliers_b$Participant, outliers_b$quiet_noise, outliers_b$Type.Accuracy), ]
+```
+
+```{r}
+imputed_b %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#  quiet_noise mean_accuracy
+# Noise               0.529
+# Quiet               0.558
+```
+
+Plotting accuracy by participant and condition
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Calculate mean accuracy for each participant in each condition
+acc_b <- imputed_b %>%
+  group_by(Participant, quiet_noise) %>%
+  summarize(
+    Accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(acc_b,
+       aes(x = quiet_noise,
+           y = Accuracy,
+           group = Participant)) +
+  geom_line(alpha = .4) +
+  geom_point(size = 2) +
+  theme_classic() +
+  labs(
+    x = "Condition",
+    y = "Mean Accuracy"
+  )
+```
+
+Calculating a noise difference score (quiet - noise)
+```{r}
+diff_b <- acc_b %>%
+  tidyr::pivot_wider(
+    names_from = quiet_noise,
+    values_from = Accuracy
+  ) %>%
+  mutate(
+    NoiseDrop = Quiet - Noise
+  ) %>%
+  arrange(desc(NoiseDrop))
+
+head(diff_b)
+```
+
+Plotting diff scores so we can see:
+- participants who perform much worse in noise (large positive values),
+- participants with little effect of noise (near 0),
+- participants who oddly perform better in noise (negative values).
+
+```{r}
+ggplot(diff_b,
+       aes(x = reorder(Participant, NoiseDrop),
+           y = NoiseDrop)) +
+  geom_point() +
+  coord_flip() +
+  theme_classic() +
+  labs(
+    x = "Participant",
+    y = "Quiet - Noise Accuracy"
+  )
+```
+
+## Monolinguals Timecourse (Updated 6/17/26)
+
+There are 16 different trial types for monlinguals:
+
+-   quiet (8): stroller, hand, car, foot, eye, nose, dog, milk
+
+-   noise (8): hand, foot, stroller, car, eye, nose, milk, dog
+
+Object pairs:
+
+- eye/dog
+- car/foot
+- stroller/hand
+- milk/nose
+
+Notes from analysis 6/17/26: Only including monolinguals over 12 months old (N=28)
+```{r, include=FALSE}
+mtime <- read_csv(
+  "monolingual_timecourse.csv",
+  col_names = TRUE
+)
+
+mtime <- mtime %>%
+  rename(condition = 1)
+
+mtime_long <- mtime %>%
+  pivot_longer(
+    cols = -condition,
+    names_to = "time",
+    values_to = "looking_time"
+  ) %>%
+  mutate(
+    time = as.numeric(time)
+  )
+```
+
+Monolinguals Quiet v. Noise plot. The dashed line at 1.2 seconds indicates the time at which the target word onset occurred.
+
+```{r, include=FALSE}
+#Reformatting the data so we can look at timecourse across quiet and noise conditions only.
+mtime_long <- mtime_long %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    )
+  )
+```
+
+```{r, include=FALSE}
+mtime_plot <- mtime_long %>%
+  group_by(time, quiet_noise) %>%
+  summarise(
+    mean_looking = mean(looking_time, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r, warning=FALSE}
+ggplot(mtime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(
+    xintercept = 1.2,
+    linetype = "dashed",
+    linewidth = 0.6,
+    color = "gray40"
+  ) +
+  labs(
+   title = "Monolingual Timecourse N=28",
+   x = "Time (s)",
+    y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+## Monolinguals Accuracy (Updated 6/18/26)
+- Same 4.2 second window for monolinguals
+
+```{r}
+mwindow <- read.csv("mwindow.csv", header=TRUE,na.strings=c(""))
+
+#remove rows based on NA in Participant column (empty rows)
+mwindow <- mwindow %>% drop_na(Participant)
+
+#remove trials that we don't want based on the name
+mwindow <- mwindow[!mwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4", "quiet_ojo", "noise_perro", "noise_nariz", "quiet_perro","quiet_nariz","noise_ojo", "quiet_leche", "noise_leche"),]
+
+mwindow <- mwindow %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(Trial.Type, "quiet") ~ "Quiet",
+      str_starts(Trial.Type, "noise") ~ "Noise"
+    )
+  )
+
+rownames(mwindow) <- NULL
+```
+
+```{r}
+mwindow %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#  quiet_noise mean_accuracy
+# Noise               0.587
+# Quiet               0.545
+```
+```{r}
+#imputing data -> impute NaN values with the means of the type accuracy for that trial type (using simplified quiet_noise variable)
+imputed_m <- mwindow %>%
+  group_by(quiet_noise) %>%
+  mutate(Type.Accuracy = ifelse(is.na(Type.Accuracy), mean(Type.Accuracy, na.rm = TRUE), Type.Accuracy))
+```
+
+```{r}
+# make z scores in order to check for outliers
+imputed_m$z <- ave(imputed_m$Type.Accuracy, imputed_m$quiet_noise, FUN = function(x) (x - mean(x)) / sd(x))
+
+#check for outliers
+outliers_m <- imputed_m[abs(imputed_m$z) > 1.5, ]
+
+#there were 85 outlier trials for the monolingual group when i switched the z score cutoff to 1.5 instead of 2
+```
+
+```{r}
+#remove outliers
+imputed_m <- imputed_m[!paste(imputed_m$Participant, imputed_m$quiet_noise, imputed_m$Type.Accuracy) %in% paste(outliers_m$Participant, outliers_m$quiet_noise, outliers_m$Type.Accuracy), ]
+```
+
+```{r}
+imputed_m %>%
+  group_by(quiet_noise) %>%
+  summarise(
+    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#  quiet_noise mean_accuracy
+# Noise               0.592
+# Quiet               0.563
+```
+
+Plotting accuracy by participant and condition
+```{r}
+# Calculate mean accuracy for each participant in each condition
+acc_m <- imputed_m %>%
+  group_by(Participant, quiet_noise) %>%
+  summarize(
+    Accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(acc_m,
+       aes(x = quiet_noise,
+           y = Accuracy,
+           group = Participant)) +
+  geom_line(alpha = .4) +
+  geom_point(size = 2) +
+  theme_classic() +
+  labs(
+    x = "Condition",
+    y = "Mean Accuracy"
+  )
+
+```
+
+Calculating a noise difference score (quiet - noise)
+```{r}
+diff_m <- acc_m %>%
+  tidyr::pivot_wider(
+    names_from = quiet_noise,
+    values_from = Accuracy
+  ) %>%
+  mutate(
+    NoiseDrop = Quiet - Noise
+  ) %>%
+  arrange(desc(NoiseDrop))
+
+head(diff_m)
+```
+
+Plotting diff scores so we can see:
+- participants who perform much worse in noise (large positive values),
+- participants with little effect of noise (near 0),
+- participants who oddly perform better in noise (negative values).
+
+```{r}
+ggplot(diff_m,
+       aes(x = reorder(Participant, NoiseDrop),
+           y = NoiseDrop)) +
+  geom_point() +
+  coord_flip() +
+  theme_classic() +
+  labs(
+    x = "Participant",
+    y = "Quiet - Noise Accuracy"
+  )
+```
+
 # Habituation Task
 ## Data Cleaning (updated 6/16/26)
 ```{r}
@@ -92,6 +510,9 @@ table(hab$language, hab$visit)
 #            V1 V2
 #bilingual   28  3
 #monolingual 32 16
+
+# pick one data point for each kid, look at which visit we got better quality data for 
+# use it for all tasks (so also look at which visit we have a LENA for)
 ```
 
 ## Stats - linear regression (full sample)
@@ -203,3 +624,6 @@ ggplot(hab, aes(x = tv, y = nov_score, color = language)) +
   ) +
   theme_classic()
 ```
+
+
+
