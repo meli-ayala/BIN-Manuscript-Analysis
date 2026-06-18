@@ -120,6 +120,7 @@ bwindow %>%
 # Noise               0.528
 # Quiet               0.521
 ```
+
 ```{r}
 #imputing data -> impute NaN values with the means of the type accuracy for that trial type (using simplified quiet_noise variable)
 imputed_b <- bwindow %>%
@@ -423,6 +424,10 @@ ggplot(diff_m,
 
 # Habituation Task
 ## Data Cleaning (updated 6/16/26)
+- 79 participants (including V1 and V2 data points) with habituation data
+this only includes kids who did habituate
+- need to filter through kids and pick one data point (either V1 or V2) for every participant
+
 ```{r}
 library(dplyr)
 hab <- read.csv("hab.csv")
@@ -430,14 +435,28 @@ age <- read.csv("age.csv")
 lena <- read.csv("lena.csv")
 mcdi <- read.csv("mcdi.csv")
 
-#79 participants (including V1 and V2 data points) with hab data
-#this only includes kids who did habituate
 hab <- hab %>%
   left_join(age, by = "Participant")
 
 hab <- hab %>%
   left_join(lena, by = "Participant")
 
+hab <- hab %>%
+  left_join(mcdi, by = "Participant")
+
+# add a language column
+hab <- hab %>%
+  mutate(
+    language = case_when(
+      grepl("^M", Participant) ~ "monolingual",
+      grepl("^B", Participant) ~ "bilingual",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+### Missing Data
+```{r}
 #which kids are missing lena data
 hab %>%
   filter(is.na(noise_sum)) %>%
@@ -448,10 +467,9 @@ hab %>%
 #[6] "M08SA_V2"  "M24JB_V2"  "M37JD_V2"  "B04DR"     "B06JR"    
 #[11] "B10KG"     "B17YT"     "B22JR"     "B24EBR"    "B23RF"    
 #[16] "B29NRP"    "B31ZR"     "B32NF"     "B12KRM_V2"
+```
 
-hab <- hab %>%
-  left_join(mcdi, by = "Participant")
-
+```{r}
 #which kids are missing mcdi data
 hab %>%
   filter(is.na(mcdi)) %>%
@@ -465,18 +483,20 @@ hab %>%
 #[21] "B27KDS"    "B28APF"    "B30MR"     "B29NRP"    "B31ZR"    
 #[26] "B34ES"     "B26GB"     "B32NF"     "B33KLH"    "B05ET_V2" 
 #[31] "B11ARF_V2" "B12KRM_V2"
-
-# add a language column
-hab <- hab %>%
-  mutate(
-    language = case_when(
-      grepl("^M", Participant) ~ "monolingual",
-      grepl("^B", Participant) ~ "bilingual",
-      TRUE ~ NA_character_
-    )
-  )
 ```
 
+```{r}
+# seeing how many kids have a V2 data point for habit data 
+hab$visit <- ifelse(grepl("_V2$", hab$Participant), "V2", "V1")
+
+table(hab$language, hab$visit)
+
+#            V1 V2
+#bilingual   28  3
+#monolingual 32 16
+```
+
+### Age groups
 ```{r}
 # creating age group bins
 hab <- hab %>%
@@ -493,7 +513,6 @@ hab <- hab %>%
     )
   )
 
-
 library(ggplot2)
 ggplot(hab, aes(x = age)) +
   geom_histogram(binwidth = 1) +
@@ -501,21 +520,8 @@ ggplot(hab, aes(x = age)) +
   theme_classic()
 ```
 
-```{r}
-# seeing how many kids have a V2 data point for habit data 
-hab$visit <- ifelse(grepl("_V2$", hab$Participant), "V2", "V1")
-
-table(hab$language, hab$visit)
-
-#            V1 V2
-#bilingual   28  3
-#monolingual 32 16
-
-# pick one data point for each kid, look at which visit we got better quality data for 
-# use it for all tasks (so also look at which visit we have a LENA for)
-```
-
-## Stats - linear regression (full sample)
+## Stats
+### Linear regressions
 ```{r}
 library(lme4)
 
@@ -527,14 +533,7 @@ summary(m2)
 
 m3 <- lm(nov1 ~ age * language, data = hab)
 summary(m3)
-```
-```{r}
-# subsetting data to run separate analyses
-mono <- hab %>% filter(language == "monolingual")
-bi   <- hab %>% filter(language == "bilingual")
-```
 
-```{r}
 m4 <- lm(nov_score ~ tv, data = bi)
 summary(m4)
 # tv main effect p=0.0525 for bilingual sample
@@ -597,7 +596,6 @@ ggplot(hab, aes(x = age_group, y = nov_score, color = language)) +
     color = "Language Group"
   ) +
   theme_classic()
-
 ```
 
 ## Hab + LENA plots
@@ -624,6 +622,3 @@ ggplot(hab, aes(x = tv, y = nov_score, color = language)) +
   ) +
   theme_classic()
 ```
-
-
-
