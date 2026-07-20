@@ -4,7 +4,7 @@ output: html_document
 date: "2026-06-01"
 ---
 # Word Recognition Task
-## Bilinguals Timecourse (Updated 6/17/26)
+## Bilinguals Timecourse (Updated 7/20/26)
 
 There are 16 different trial types for bilinguals:
 
@@ -20,6 +20,8 @@ Object pairs:
 - nariz/leche
 
 Notes from analysis 6/17/26: Only including bilinguals over 12 months old (N=24)
+
+Notes from analysis 7/20/26: Added 1 more bilingual over 12 mos old (N = 25)
 ```{r, include=FALSE}
 library(tidyverse)
 
@@ -52,13 +54,18 @@ btime_long <- btime_long %>%
     quiet_noise = case_when(
       str_starts(condition, "quiet") ~ "Quiet",
       str_starts(condition, "noise") ~ "Noise"
+    ),
+    word = str_remove(condition, "^(quiet|noise)_"),
+    language = case_when(
+      word %in% c("stroller", "hand", "car", "foot") ~ "English",
+      word %in% c("perro", "nariz", "leche", "ojo") ~ "Spanish"
     )
   )
 ```
 
 ```{r, include=FALSE}
 btime_plot <- btime_long %>%
-  group_by(time, quiet_noise) %>%
+  group_by(time, quiet_noise, language) %>%
   summarise(
     mean_looking = mean(looking_time, na.rm = TRUE),
     .groups = "drop"
@@ -74,90 +81,167 @@ ggplot(btime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
     linewidth = 0.6,
     color = "gray40"
   ) +
+  facet_wrap(~ language) +
   labs(
-   title = "Bilingual Timecourse N=24",
-   x = "Time (s)",
+    title = "Bilingual Timecourse by Language N=25",
+    x = "Time (s)",
     y = "Proportion of Looking Time to Target",
     color = "Listening Condition"
   ) +
   theme_classic()
 ```
+## Accuracy Analysis: baseline- corrected (Added 7/20/26)
+```{r}
+library(tidyverse)
 
-## Bilinguals Accuracy (Updated 6/18/26)
+# Reads one window pass. Recomputes proportion from frame counts (cols 5 = Frames to
+# Target, 6 = Frames to Distractor) so NaN/DROPPED rows are handled by the count filter,
+# not by parsing the accuracy string. total >= 15 frames == 0.5 s of looking at 30 fps.
+read_window <- function(path, value) {
+  raw <- read.csv(path, header = TRUE, stringsAsFactors = FALSE)
+  tibble(
+    Participant = as.character(raw[[1]]),
+    Trial.Number = raw[[2]],
+    Trial.Type   = str_trim(as.character(raw[[4]])),
+    ft = suppressWarnings(as.numeric(raw[[5]])),   # Frames to Target
+    fd = suppressWarnings(as.numeric(raw[[6]]))    # Frames to Distractor
+  ) %>%
+    filter(!is.na(Participant), str_trim(Participant) != "") %>%   # drop blank separator rows
+    mutate(total = ft + fd) %>%
+    filter(!is.na(total), total >= 15) %>%                         # 0.5 s looking; removes DROPPED
+    transmute(
+      Participant,
+      trial = parse_number(as.character(Trial.Number)),            # "Trial 5" -> 5
+      Trial.Type,
+      !!value := ft / total
+    )
+}
 
--   This data reflects looking time data for a 4.2 second window from 2 seconds until the end of the trial (6.2 seconds)
-- This window was decided mostly based on the monolingual timecourse plot below 
+# Joins a test pass (60:180) with its baseline pass (0:36) and subtracts, per trial.
+build_corrected <- function(test_path, base_path, exclude_types) {
+  test <- read_window(test_path, "test_acc")
+  base <- read_window(base_path, "base_acc")
+  inner_join(test, base, by = c("Participant", "trial", "Trial.Type")) %>%   # valid in BOTH windows
+    mutate(
+      corrected_acc = test_acc - base_acc,
+      quiet_noise = case_when(
+        str_starts(Trial.Type, "quiet") ~ "Quiet",
+        str_starts(Trial.Type, "noise") ~ "Noise"
+      )
+    ) %>%
+    filter(!Trial.Type %in% exclude_types)
+}
+```
 
+## Bilinguals Accuracy (Updated 7/20/26)
+
+-   This data reflects looking time data for a 4 second window from 2-6 seconds
+- baseline-corrected proportion is calculated using baseline from 0-1.2 seconds
+
+### Build corrected data and labels
 ```{r, include=FALSE}
-bwindow <- read.csv("bwindow.csv", header=TRUE,na.strings=c(""))
+b_exclude <- c("baseline_1","baseline_2","baseline_3","baseline_4",
+               "quiet_eye","noise_eye","noise_nose","quiet_nose",
+               "noise_milk","noise_dog","quiet_dog","quiet_milk")
 
-#remove rows based on NA in Participant column (empty rows)
-bwindow <- bwindow %>% drop_na(Participant)
-
-#remove trials that we don't want based on the name
-bwindow <- bwindow[!bwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4","quiet_eye", "noise_eye", "noise_nose", "quiet_nose", "noise_milk", "noise_dog", "quiet_dog", "quiet_milk"),]
-
-bwindow <- bwindow %>%
+bcorr <- build_corrected("bwindow.csv", "bbaseline.csv", b_exclude) %>%
   mutate(
-    quiet_noise = case_when(
-      str_starts(Trial.Type, "quiet") ~ "Quiet",
-      str_starts(Trial.Type, "noise") ~ "Noise"
+    word = str_remove(Trial.Type, "^(quiet|noise)_"),
+    language = case_when(
+      word %in% c("stroller","hand","car","foot") ~ "English",
+      word %in% c("perro","nariz","leche","ojo")  ~ "Spanish"
     )
   )
-
-rownames(bwindow) <- NULL
 ```
 
-```{r, warning=FALSE}
-bwindow %>%
-  group_by(quiet_noise) %>%
+### check how many trials survive the baseline requirement (run once, then decide):
+
+```{r}
+# The baseline window is only 36 frames, so requiring 15 (=0.5 s) is a HIGH bar there.
+# See how much you lose to "no valid baseline" before trusting the corrected numbers.
+b_test_n <- read_window("bwindow.csv", "test_acc") %>%
+  filter(!Trial.Type %in% b_exclude) %>% nrow()
+b_corr_n <- nrow(bcorr)
+message("Bilingual trials with valid TEST window: ", b_test_n,
+        " | with valid test AND baseline: ", b_corr_n,
+        " (", round(100 * b_corr_n / b_test_n), "% retained)")
+
+```
+### inclusion rules
+
+```{r}
+MIN_PER_COND <- 4   # >=4 valid corrected Quiet AND >=4 valid corrected Noise trials
+
+keep_ids <- bcorr %>%
+  count(Participant, quiet_noise) %>%
+  pivot_wider(names_from = quiet_noise, values_from = n, values_fill = 0) %>%
+  filter(Quiet >= MIN_PER_COND, Noise >= MIN_PER_COND) %>%
+  pull(Participant)
+
+bcorr_clean <- bcorr %>% filter(Participant %in% keep_ids)
+message("Kept ", length(keep_ids), " of ", n_distinct(bcorr$Participant), " participants")
+setdiff(unique(bcorr$Participant), keep_ids)   # who was dropped & why
+```
+### participant-level means
+
+```{r}
+p_level <- bcorr_clean %>%
+  group_by(Participant, quiet_noise, language) %>%
+  summarise(acc = mean(corrected_acc), n = n(), .groups = "drop")
+
+p_level %>%
+  group_by(quiet_noise, language) %>%
+  summarise(mean_corr = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+```
+### tests against 0 (the null is now "no shift from baseline"):
+
+```{r}
+p_overall <- bcorr_clean %>%
+  group_by(Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop")
+t.test(p_overall$acc, mu = 0)          # is target looking above pre-naming baseline?
+
+by_cond_wide <- bcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+t.test(by_cond_wide$Quiet, by_cond_wide$Noise, paired = TRUE)   # Quiet vs Noise
+```
+### split by language
+
+```{r}
+# Bilingual: language x condition, participant-level means, one-sample t vs 0 per cell.
+bilingual_lang_cond <- bcorr_clean %>%
+  group_by(language, quiet_noise, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(language, quiet_noise) %>%
   summarise(
-    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
+    N       = n(),
+    Mean    = mean(acc),
+    SE      = sd(acc) / sqrt(n()),
+    CI_low  = t.test(acc, mu = 0)$conf.int[1],
+    CI_high = t.test(acc, mu = 0)$conf.int[2],
+    t       = t.test(acc, mu = 0)$statistic,
+    df      = t.test(acc, mu = 0)$parameter,
+    p       = t.test(acc, mu = 0)$p.value,
     .groups = "drop"
-  )
+  ) %>%
+  mutate(across(c(Mean, SE, CI_low, CI_high, t), ~round(., 3)),
+         p = round(p, 4)) %>%
+  arrange(language, quiet_noise)
 
-# quiet_noise mean_accuracy
-# Noise               0.528
-# Quiet               0.521
+bilingual_lang_cond
 ```
+
+### mixed effects model
 
 ```{r}
-#imputing data -> impute NaN values with the means of the type accuracy for that trial type (using simplified quiet_noise variable)
-imputed_b <- bwindow %>%
-  group_by(quiet_noise) %>%
-  mutate(Type.Accuracy = ifelse(is.na(Type.Accuracy), mean(Type.Accuracy, na.rm = TRUE), Type.Accuracy))
+library(lme4); library(lmerTest)
+m <- lmer(corrected_acc ~ quiet_noise * language + (1 | Participant), data = bcorr_clean)
+summary(m)
 ```
 
-```{r}
-# make z scores in order to check for outliers
-imputed_b$z <- ave(imputed_b$Type.Accuracy, imputed_b$quiet_noise, FUN = function(x) (x - mean(x)) / sd(x))
-
-#check for outliers
-outliers_b <- imputed_b[abs(imputed_b$z) > 1.5, ]
-
-#changed z score cut off to 1.5 to get rid of trials with accuracy of 0
-#now there are 93 outlier trials 
-# there were 0 outlier trials when z score cut off was set at 2
-```
-
-```{r}
-#remove outliers
-imputed_b <- imputed_b[!paste(imputed_b$Participant, imputed_b$quiet_noise, imputed_b$Type.Accuracy) %in% paste(outliers_b$Participant, outliers_b$quiet_noise, outliers_b$Type.Accuracy), ]
-```
-
-```{r}
-imputed_b %>%
-  group_by(quiet_noise) %>%
-  summarise(
-    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-#  quiet_noise mean_accuracy
-# Noise               0.529
-# Quiet               0.558
-```
-
+### Ignore for now
 Plotting accuracy by participant and condition
 ```{r}
 library(dplyr)
@@ -218,7 +302,7 @@ ggplot(diff_b,
   )
 ```
 
-## Monolinguals Timecourse (Updated 6/17/26)
+## Monolinguals Timecourse (Updated 7/20/26)
 
 There are 16 different trial types for monlinguals:
 
@@ -234,6 +318,8 @@ Object pairs:
 - milk/nose
 
 Notes from analysis 6/17/26: Only including monolinguals over 12 months old (N=28)
+
+Notes from analysis 7/20/26: Added 2 more monolinguals over 12 mos (N = 30)
 ```{r, include=FALSE}
 mtime <- read_csv(
   "monolingual_timecourse.csv",
@@ -286,7 +372,7 @@ ggplot(mtime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
     color = "gray40"
   ) +
   labs(
-   title = "Monolingual Timecourse N=28",
+   title = "Monolingual Timecourse N=30",
    x = "Time (s)",
     y = "Proportion of Looking Time to Target",
     color = "Listening Condition"
@@ -294,76 +380,105 @@ ggplot(mtime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
   theme_classic()
 ```
 
-## Monolinguals Accuracy (Updated 6/18/26)
-- Same 4.2 second window for monolinguals
+## Monolinguals Accuracy (Updated 7/20/26)
 
+### build corrected data
 ```{r}
-mwindow <- read.csv("mwindow.csv", header=TRUE,na.strings=c(""))
+# Monolinguals hear all 8 objects in English; drop only the baseline trials.
+m_exclude <- c("baseline_1", "baseline_2", "baseline_3", "baseline_4")
 
-#remove rows based on NA in Participant column (empty rows)
-mwindow <- mwindow %>% drop_na(Participant)
-
-#remove trials that we don't want based on the name
-mwindow <- mwindow[!mwindow$Trial.Type %in% c("baseline_1", "baseline_2", "baseline_3", "baseline_4", "quiet_ojo", "noise_perro", "noise_nariz", "quiet_perro","quiet_nariz","noise_ojo", "quiet_leche", "noise_leche"),]
-
-mwindow <- mwindow %>%
-  mutate(
-    quiet_noise = case_when(
-      str_starts(Trial.Type, "quiet") ~ "Quiet",
-      str_starts(Trial.Type, "noise") ~ "Noise"
-    )
-  )
-
-rownames(mwindow) <- NULL
+mcorr <- build_corrected("mwindow.csv", "mbaseline.csv", m_exclude)
 ```
 
+### baseline survival
+
 ```{r}
-mwindow %>%
+m_test_n <- read_window("mwindow.csv", "test_acc") %>%
+  filter(!Trial.Type %in% m_exclude) %>% nrow()
+m_corr_n <- nrow(mcorr)
+message("Monolingual trials with valid TEST window: ", m_test_n,
+        " | with valid test AND baseline: ", m_corr_n,
+        " (", round(100 * m_corr_n / m_test_n), "% retained)")
+```
+### inclusion rules
+
+```{r}
+m_keep_ids <- mcorr %>%
+  count(Participant, quiet_noise) %>%
+  pivot_wider(names_from = quiet_noise, values_from = n, values_fill = 0) %>%
+  filter(Quiet >= MIN_PER_COND, Noise >= MIN_PER_COND) %>%
+  pull(Participant)
+
+mcorr_clean <- mcorr %>% filter(Participant %in% m_keep_ids)
+message("Kept ", length(m_keep_ids), " of ", n_distinct(mcorr$Participant), " participants")
+setdiff(unique(mcorr$Participant), m_keep_ids)   # who was dropped & why
+```
+### participant level means
+
+```{r}
+m_p_level <- mcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), n = n(), .groups = "drop")
+
+m_p_level %>%
   group_by(quiet_noise) %>%
-  summarise(
-    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
-    .groups = "drop"
+  summarise(mean_corr = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+```
+### tests against zero
+
+```{r}
+m_overall <- mcorr_clean %>%
+  group_by(Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop")
+t.test(m_overall$acc, mu = 0)          # is target looking above pre-naming baseline?
+
+m_by_cond_wide <- mcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+t.test(m_by_cond_wide$Quiet, m_by_cond_wide$Noise, paired = TRUE)   # Quiet vs Noise
+```
+
+### mixed model
+
+```{r}
+library(lme4); library(lmerTest)
+mm <- lmer(corrected_acc ~ quiet_noise + (1 | Participant), data = mcorr_clean)
+summary(mm)
+```
+## Combined summary table
+
+```{r}
+library(broom)
+
+# Helper: one-sample t vs 0 on participant-level corrected means, returned as a tidy row
+summ_vs0 <- function(df, group_label) {
+  p <- df %>%
+    group_by(Participant) %>%
+    summarise(acc = mean(corrected_acc), .groups = "drop")
+  tt <- t.test(p$acc, mu = 0)
+  tibble(
+    Group   = group_label,
+    N       = nrow(p),
+    Mean    = unname(tt$estimate),
+    CI_low  = tt$conf.int[1],
+    CI_high = tt$conf.int[2],
+    t       = unname(tt$statistic),
+    df      = unname(tt$parameter),
+    p       = tt$p.value
   )
+}
 
-#  quiet_noise mean_accuracy
-# Noise               0.587
-# Quiet               0.545
+summary_table <- bind_rows(
+  summ_vs0(mcorr_clean, "Monolingual"),
+  summ_vs0(bcorr_clean, "Bilingual")
+) %>%
+  mutate(across(c(Mean, CI_low, CI_high, t), ~round(., 3)),
+         p = round(p, 4))
+
+summary_table
 ```
-```{r}
-#imputing data -> impute NaN values with the means of the type accuracy for that trial type (using simplified quiet_noise variable)
-imputed_m <- mwindow %>%
-  group_by(quiet_noise) %>%
-  mutate(Type.Accuracy = ifelse(is.na(Type.Accuracy), mean(Type.Accuracy, na.rm = TRUE), Type.Accuracy))
-```
-
-```{r}
-# make z scores in order to check for outliers
-imputed_m$z <- ave(imputed_m$Type.Accuracy, imputed_m$quiet_noise, FUN = function(x) (x - mean(x)) / sd(x))
-
-#check for outliers
-outliers_m <- imputed_m[abs(imputed_m$z) > 1.5, ]
-
-#there were 85 outlier trials for the monolingual group when i switched the z score cutoff to 1.5 instead of 2
-```
-
-```{r}
-#remove outliers
-imputed_m <- imputed_m[!paste(imputed_m$Participant, imputed_m$quiet_noise, imputed_m$Type.Accuracy) %in% paste(outliers_m$Participant, outliers_m$quiet_noise, outliers_m$Type.Accuracy), ]
-```
-
-```{r}
-imputed_m %>%
-  group_by(quiet_noise) %>%
-  summarise(
-    mean_accuracy = mean(Type.Accuracy, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-#  quiet_noise mean_accuracy
-# Noise               0.592
-# Quiet               0.563
-```
-
+### Ignore for now
 Plotting accuracy by participant and condition
 ```{r}
 # Calculate mean accuracy for each participant in each condition
