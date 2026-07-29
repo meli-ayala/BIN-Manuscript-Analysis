@@ -1,0 +1,879 @@
+---
+title: "Bilingual Infant Noise (BIN) Study"
+subtitle: "Word Recognition & Habituation — Results Walkthrough"
+author: "Mels Ayala"
+date: today
+
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    pdf-engine: pdflatex
+    mainfont: "Latin Modern Roman"
+    include-in-header: |
+      \addtokomafont{disposition}{\rmfamily}
+    geometry: margin=1in
+
+execute:
+  echo: false
+  warning: false
+  message: false
+
+editor: source
+---
+
+```{r setup, include=FALSE}
+# One place for every package + global options. Hidden from the PDF.
+# Required packages: tidyverse, lme4, lmerTest, broom, emmeans, car
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(broom)
+library(emmeans)
+
+knitr::opts_chunk$set(
+  fig.width  = 7,
+  fig.height = 4.5,
+  dpi        = 150,
+  fig.align  = "center"
+)
+options(width = 85)   # keeps wide model summaries from overflowing the page
+```
+
+```{r ses-prep, include=FALSE}
+# --- SES predictors ---
+# Bracket -> ordinal rank (1 = lowest). With ">$75,000" open-ended, ranks are
+# more defensible than midpoints. parent_ed is z-scored across the full sample.
+# clean_id() normalizes IDs (trim + uppercase) so the SES join below doesn't
+# silently drop participants to whitespace/case mismatches.
+clean_id <- function(x) str_trim(toupper(as.character(x)))
+
+income_levels <- c("<$15,000", "$15,000-$25,000", "$25,000-$35,000",
+                   "$35,000-$45,000", "$45,000-$55,000", "$55,000-$65,000",
+                   "$65,000-$75,000", ">$75,000")
+
+ses <- read_csv("predictors.csv", show_col_types = FALSE) %>%
+  select(participant, `parent ed`, income) %>%
+  rename(Participant = participant, parent_ed = `parent ed`) %>%
+  mutate(
+    Participant = clean_id(Participant),
+    income_rank = as.integer(factor(str_trim(income), levels = income_levels)),
+    parent_ed_z = as.numeric(scale(parent_ed))
+  )
+
+# expected missing SES: M43EW, B17YT, B23RF, B29NRP, B31ZR
+```
+
+```{r wordrec-functions, include=FALSE}
+# Reads one window pass. Recomputes proportion from frame counts (col 5 = Frames
+# to Target, 6 = Frames to Distractor) so NaN/DROPPED rows are handled by the
+# count filter. total >= 15 frames == 0.5 s of looking at 30 fps.
+read_window <- function(path, value) {
+  raw <- read.csv(path, header = TRUE, stringsAsFactors = FALSE)
+  tibble(
+    Participant  = as.character(raw[[1]]),
+    Trial.Number = raw[[2]],
+    Trial.Type   = str_trim(as.character(raw[[4]])),
+    ft = suppressWarnings(as.numeric(raw[[5]])),
+    fd = suppressWarnings(as.numeric(raw[[6]]))
+  ) %>%
+    filter(!is.na(Participant), str_trim(Participant) != "") %>%
+    mutate(total = ft + fd) %>%
+    filter(!is.na(total), total >= 15) %>%
+    transmute(
+      Participant,
+      trial = parse_number(as.character(Trial.Number)),
+      Trial.Type,
+      !!value := ft / total
+    )
+}
+
+# Joins a test pass (60:180) with its baseline pass (0:36) and subtracts, per trial.
+build_corrected <- function(test_path, base_path, exclude_types) {
+  test <- read_window(test_path, "test_acc")
+  base <- read_window(base_path, "base_acc")
+  inner_join(test, base, by = c("Participant", "trial", "Trial.Type")) %>%
+    mutate(
+      corrected_acc = test_acc - base_acc,
+      quiet_noise = case_when(
+        str_starts(Trial.Type, "quiet") ~ "Quiet",
+        str_starts(Trial.Type, "noise") ~ "Noise"
+      )
+    ) %>%
+    filter(!Trial.Type %in% exclude_types)
+}
+```
+
+# Word Recognition Task
+
+## Bilingual Timecourse
+
+There are 16 trial types for bilinguals:
+
+- quiet (8): stroller, hand, car, foot, perro, nariz, leche, ojo
+- noise (8): hand, foot, stroller, car, perro, nariz, ojo, leche
+
+Object pairs: ojo/perro, car/foot, stroller/hand, nariz/leche.
+
+Includes bilinguals over 12 months old (N = 25, updated 7/20/26). The dashed
+line at 1.2 s marks target word onset.
+
+```{r btime-read, include=FALSE}
+btime <- read_csv("bilingual_timecourse.csv", col_names = TRUE) %>%
+  rename(condition = 1)
+
+btime_long <- btime %>%
+  pivot_longer(cols = -condition, names_to = "time", values_to = "looking_time") %>%
+  mutate(time = as.numeric(time)) %>%
+  mutate(
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    ),
+    word = str_remove(condition, "^(quiet|noise)_"),
+    language = case_when(
+      word %in% c("stroller", "hand", "car", "foot") ~ "English",
+      word %in% c("perro", "nariz", "leche", "ojo")  ~ "Spanish"
+    )
+  )
+
+btime_plot <- btime_long %>%
+  group_by(time, quiet_noise, language) %>%
+  summarise(mean_looking = mean(looking_time, na.rm = TRUE), .groups = "drop")
+```
+
+```{r btime-plot}
+ggplot(btime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 1.2, linetype = "dashed", linewidth = 0.6, color = "gray40") +
+  facet_wrap(~ language) +
+  labs(
+    title = "Bilingual Timecourse by Language (N = 25)",
+    x = "Time (s)", y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+## Bilingual Accuracy (baseline-corrected)
+
+Looking-time data for a 4 s window (2–6 s); baseline-corrected using the
+0–1.2 s window.
+
+```{r bcorr-build, include=FALSE}
+b_exclude <- c("baseline_1","baseline_2","baseline_3","baseline_4",
+               "quiet_eye","noise_eye","noise_nose","quiet_nose",
+               "noise_milk","noise_dog","quiet_dog","quiet_milk")
+
+bcorr <- build_corrected("bwindow.csv", "bbaseline.csv", b_exclude) %>%
+  mutate(
+    word = str_remove(Trial.Type, "^(quiet|noise)_"),
+    language = case_when(
+      word %in% c("stroller","hand","car","foot") ~ "English",
+      word %in% c("perro","nariz","leche","ojo")  ~ "Spanish"
+    )
+  )
+```
+
+**Baseline survival.** The baseline window is only 36 frames, so requiring
+15 (= 0.5 s) is a high bar. How many trials survive before we trust the
+corrected numbers:
+
+```{r bcorr-survival}
+b_test_n <- read_window("bwindow.csv", "test_acc") %>%
+  filter(!Trial.Type %in% b_exclude) %>% nrow()
+b_corr_n <- nrow(bcorr)
+cat("Bilingual trials with valid TEST window:", b_test_n,
+    "| with valid test AND baseline:", b_corr_n,
+    paste0("(", round(100 * b_corr_n / b_test_n), "% retained)\n"))
+```
+
+**Inclusion rule:** keep participants with >= 4 valid corrected Quiet *and*
+>= 4 valid corrected Noise trials.
+
+```{r bcorr-inclusion}
+MIN_PER_COND <- 4
+
+keep_ids <- bcorr %>%
+  count(Participant, quiet_noise) %>%
+  pivot_wider(names_from = quiet_noise, values_from = n, values_fill = 0) %>%
+  filter(Quiet >= MIN_PER_COND, Noise >= MIN_PER_COND) %>%
+  pull(Participant)
+
+bcorr_clean <- bcorr %>% filter(Participant %in% keep_ids)
+cat("Kept", length(keep_ids), "of", n_distinct(bcorr$Participant), "participants\n")
+```
+
+**SES join.** IDs are normalized on both sides before joining. The check
+below should return an empty tibble — if it lists anyone, those looking-data
+IDs still don't match a row in `predictors.csv`.
+
+```{r bcorr-ses-join}
+bcorr_ses <- bcorr_clean %>%
+  mutate(Participant = clean_id(Participant)) %>%
+  left_join(ses, by = "Participant")
+
+bcorr_ses %>% filter(is.na(parent_ed)) %>% distinct(Participant)
+```
+
+### Participant-level means
+
+```{r bcorr-pmeans}
+p_level <- bcorr_clean %>%
+  group_by(Participant, quiet_noise, language) %>%
+  summarise(acc = mean(corrected_acc), n = n(), .groups = "drop")
+
+p_level %>%
+  group_by(quiet_noise, language) %>%
+  summarise(mean_corr = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+```
+
+### Tests against 0 (null = no shift from baseline)
+
+```{r bcorr-ttests}
+p_overall <- bcorr_clean %>%
+  group_by(Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop")
+t.test(p_overall$acc, mu = 0)          # target looking above pre-naming baseline?
+
+by_cond_wide <- bcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+t.test(by_cond_wide$Quiet, by_cond_wide$Noise, paired = TRUE)   # Quiet vs Noise
+```
+
+### Split by language
+
+```{r bcorr-by-language}
+bilingual_lang_cond <- bcorr_clean %>%
+  group_by(language, quiet_noise, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(language, quiet_noise) %>%
+  summarise(
+    N       = n(),
+    Mean    = mean(acc),
+    SE      = sd(acc) / sqrt(n()),
+    CI_low  = t.test(acc, mu = 0)$conf.int[1],
+    CI_high = t.test(acc, mu = 0)$conf.int[2],
+    t       = t.test(acc, mu = 0)$statistic,
+    df      = t.test(acc, mu = 0)$parameter,
+    p       = t.test(acc, mu = 0)$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(across(c(Mean, SE, CI_low, CI_high, t), ~round(., 3)),
+         p = round(p, 4)) %>%
+  arrange(language, quiet_noise)
+
+bilingual_lang_cond
+```
+
+### Mixed-effects model, with vs. without SES
+
+Both models are fit on the SES-complete subset so the comparison is
+apples-to-apples. `anova()` tests whether adding parent education improves fit.
+
+```{r bilingual-mixed-ses}
+b_ses_complete <- bcorr_ses %>% filter(!is.na(parent_ed_z))
+
+m0 <- lmer(corrected_acc ~ quiet_noise * language + (1 | Participant),
+           data = b_ses_complete)
+m1 <- lmer(corrected_acc ~ quiet_noise * language + parent_ed_z + (1 | Participant),
+           data = b_ses_complete)
+
+summary(m1)
+anova(m0, m1)
+cat("N participants in SES models:", n_distinct(b_ses_complete$Participant), "\n")
+```
+
+For reference, the same model on the **full** bilingual sample (no SES filter):
+
+```{r bilingual-mixed-full}
+m <- lmer(corrected_acc ~ quiet_noise * language + (1 | Participant), data = bcorr_clean)
+summary(m)
+```
+
+### Accuracy by object
+
+```{r bcorr-by-object}
+b_by_object <- bcorr_clean %>%
+  group_by(language, word, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(language, word) %>%
+  summarise(mean = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+
+ggplot(b_by_object, aes(x = mean, y = reorder(word, mean), color = language)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_pointrange(aes(xmin = mean - se, xmax = mean + se), linewidth = 0.8) +
+  labs(
+    title = "Bilingual: Baseline-Corrected Accuracy by Word",
+    x = "Corrected accuracy (target looking above baseline)",
+    y = NULL, color = "Language"
+  ) +
+  theme_classic()
+```
+
+### Recognized words (exploratory)
+
+Words selected post-hoc for being above 0.
+
+```{r bcorr-goodwords}
+good_words <- c("leche", "car", "perro", "hand")
+b_good <- bcorr_clean %>% filter(word %in% good_words)
+
+b_good_cell <- b_good %>%
+  group_by(word, quiet_noise, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(word, quiet_noise) %>%
+  summarise(mean = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+
+b_good_cell
+```
+
+```{r bcorr-goodwords-plot}
+ggplot(b_good_cell, aes(x = quiet_noise, y = mean, fill = quiet_noise)) +
+  geom_col(width = 0.6) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.2) +
+  geom_hline(yintercept = 0, color = "gray40") +
+  facet_wrap(~ word) +
+  labs(
+    title = "Bilingual: Quiet vs. Noise for Recognized Words",
+    subtitle = "Exploratory — words selected post-hoc for being above 0",
+    x = NULL, y = "Corrected accuracy", fill = "Condition"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+```
+
+```{r bcorr-goodwords-ttest}
+b_good_wide <- b_good %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+
+t.test(b_good_wide$Quiet, b_good_wide$Noise, paired = TRUE)   # exploratory
+```
+
+## Monolingual Timecourse
+
+16 trial types for monolinguals:
+
+- quiet (8): stroller, hand, car, foot, eye, nose, dog, milk
+- noise (8): hand, foot, stroller, car, eye, nose, milk, dog
+
+Object pairs: eye/dog, car/foot, stroller/hand, milk/nose. Includes
+monolinguals over 12 months old (N = 30, updated 7/20/26).
+
+```{r mtime-read, include=FALSE}
+mtime <- read_csv("monolingual_timecourse.csv", col_names = TRUE) %>%
+  rename(condition = 1)
+
+mtime_plot <- mtime %>%
+  pivot_longer(cols = -condition, names_to = "time", values_to = "looking_time") %>%
+  mutate(
+    time = as.numeric(time),
+    quiet_noise = case_when(
+      str_starts(condition, "quiet") ~ "Quiet",
+      str_starts(condition, "noise") ~ "Noise"
+    )
+  ) %>%
+  group_by(time, quiet_noise) %>%
+  summarise(mean_looking = mean(looking_time, na.rm = TRUE), .groups = "drop")
+```
+
+```{r mtime-plot}
+ggplot(mtime_plot, aes(x = time, y = mean_looking, color = quiet_noise)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 1.2, linetype = "dashed", linewidth = 0.6, color = "gray40") +
+  labs(
+    title = "Monolingual Timecourse (N = 30)",
+    x = "Time (s)", y = "Proportion of Looking Time to Target",
+    color = "Listening Condition"
+  ) +
+  theme_classic()
+```
+
+## Monolingual Accuracy (baseline-corrected)
+
+```{r mcorr-build, include=FALSE}
+# Monolinguals hear all 8 objects in English; drop only the baseline trials.
+m_exclude <- c("baseline_1", "baseline_2", "baseline_3", "baseline_4")
+mcorr <- build_corrected("mwindow.csv", "mbaseline.csv", m_exclude)
+```
+
+**Baseline survival:**
+
+```{r mcorr-survival}
+m_test_n <- read_window("mwindow.csv", "test_acc") %>%
+  filter(!Trial.Type %in% m_exclude) %>% nrow()
+m_corr_n <- nrow(mcorr)
+cat("Monolingual trials with valid TEST window:", m_test_n,
+    "| with valid test AND baseline:", m_corr_n,
+    paste0("(", round(100 * m_corr_n / m_test_n), "% retained)\n"))
+```
+
+**Inclusion rule** (same as bilinguals):
+
+```{r mcorr-inclusion}
+m_keep_ids <- mcorr %>%
+  count(Participant, quiet_noise) %>%
+  pivot_wider(names_from = quiet_noise, values_from = n, values_fill = 0) %>%
+  filter(Quiet >= MIN_PER_COND, Noise >= MIN_PER_COND) %>%
+  pull(Participant)
+
+mcorr_clean <- mcorr %>% filter(Participant %in% m_keep_ids)
+cat("Kept", length(m_keep_ids), "of", n_distinct(mcorr$Participant), "participants\n")
+```
+
+```{r mcorr-ses-join}
+mcorr_ses <- mcorr_clean %>%
+  mutate(Participant = clean_id(Participant)) %>%
+  left_join(ses, by = "Participant")
+
+mcorr_ses %>% filter(is.na(parent_ed)) %>% distinct(Participant)   # should be empty
+```
+
+### Participant-level means
+
+```{r mcorr-pmeans}
+m_p_level <- mcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), n = n(), .groups = "drop")
+
+m_p_level %>%
+  group_by(quiet_noise) %>%
+  summarise(mean_corr = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+```
+
+### Tests against zero
+
+```{r mcorr-ttests}
+m_overall <- mcorr_clean %>%
+  group_by(Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop")
+t.test(m_overall$acc, mu = 0)
+
+m_by_cond_wide <- mcorr_clean %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+t.test(m_by_cond_wide$Quiet, m_by_cond_wide$Noise, paired = TRUE)
+```
+
+### Accuracy by object
+
+```{r mcorr-by-object}
+m_by_object <- mcorr_clean %>%
+  mutate(word = str_remove(Trial.Type, "^(quiet|noise)_")) %>%
+  group_by(word, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(word) %>%
+  summarise(mean = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+
+ggplot(m_by_object, aes(x = mean, y = reorder(word, mean))) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_pointrange(aes(xmin = mean - se, xmax = mean + se), linewidth = 0.8) +
+  labs(
+    title = "Monolingual: Baseline-Corrected Accuracy by Word",
+    x = "Corrected accuracy (target looking above baseline)", y = NULL
+  ) +
+  theme_classic()
+```
+
+### Recognized words (exploratory)
+
+```{r mcorr-goodwords}
+m_good_words <- c("milk", "hand", "car", "dog")
+
+m_good <- mcorr_clean %>%
+  mutate(word = str_remove(Trial.Type, "^(quiet|noise)_")) %>%
+  filter(word %in% m_good_words)
+
+m_good_cell <- m_good %>%
+  group_by(word, quiet_noise, Participant) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  group_by(word, quiet_noise) %>%
+  summarise(mean = mean(acc), se = sd(acc)/sqrt(n()), n = n(), .groups = "drop")
+
+m_good_cell
+```
+
+```{r mcorr-goodwords-plot}
+ggplot(m_good_cell, aes(x = quiet_noise, y = mean, fill = quiet_noise)) +
+  geom_col(width = 0.6) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.2) +
+  geom_hline(yintercept = 0, color = "gray40") +
+  facet_wrap(~ word) +
+  labs(
+    title = "Monolingual: Quiet vs. Noise for Recognized Words",
+    subtitle = "Exploratory — words selected post-hoc for being above 0",
+    x = NULL, y = "Corrected accuracy", fill = "Condition"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+```
+
+```{r mcorr-goodwords-ttest}
+m_good_wide <- m_good %>%
+  group_by(Participant, quiet_noise) %>%
+  summarise(acc = mean(corrected_acc), .groups = "drop") %>%
+  pivot_wider(names_from = quiet_noise, values_from = acc)
+
+t.test(m_good_wide$Quiet, m_good_wide$Noise, paired = TRUE)   # exploratory
+```
+
+### Mixed-effects model, with vs. without SES
+
+Little is expected here: monolingual parent education has a restricted range
+(mostly 16–17 years).
+
+```{r mono-mixed-ses}
+m_ses_complete <- mcorr_ses %>% filter(!is.na(parent_ed_z))
+
+mm0 <- lmer(corrected_acc ~ quiet_noise + (1 | Participant), data = m_ses_complete)
+mm1 <- lmer(corrected_acc ~ quiet_noise + parent_ed_z + (1 | Participant), data = m_ses_complete)
+
+summary(mm1)
+anova(mm0, mm1)
+cat("N participants in SES models:", n_distinct(m_ses_complete$Participant), "\n")
+```
+
+```{r mono-mixed-full}
+mm <- lmer(corrected_acc ~ quiet_noise + (1 | Participant), data = mcorr_clean)
+summary(mm)
+```
+
+## Combined Analyses
+
+### Summary table (both groups vs. 0)
+
+```{r combined-summary}
+summ_vs0 <- function(df, group_label) {
+  p <- df %>% group_by(Participant) %>% summarise(acc = mean(corrected_acc), .groups = "drop")
+  tt <- t.test(p$acc, mu = 0)
+  tibble(
+    Group = group_label, N = nrow(p),
+    Mean = unname(tt$estimate),
+    CI_low = tt$conf.int[1], CI_high = tt$conf.int[2],
+    t = unname(tt$statistic), df = unname(tt$parameter), p = tt$p.value
+  )
+}
+
+summary_table <- bind_rows(
+  summ_vs0(mcorr_clean, "Monolingual"),
+  summ_vs0(bcorr_clean, "Bilingual")
+) %>%
+  mutate(across(c(Mean, CI_low, CI_high, t), ~round(., 3)), p = round(p, 4))
+
+summary_table
+```
+
+### Matched-object model
+
+Bilinguals heard leche/perro in Spanish; monolinguals heard milk/dog in
+English — same physical objects, collapsed to one label. The four shared
+objects are milk, dog, hand, car.
+
+```{r combined-build}
+to_object <- function(word) {
+  recode(word,
+         "leche" = "milk", "perro" = "dog",
+         "milk"  = "milk", "dog"   = "dog",
+         "hand"  = "hand", "car"   = "car",
+         .default = NA_character_)
+}
+shared_objects <- c("milk", "dog", "hand", "car")
+
+b_matched <- bcorr_clean %>%
+  mutate(object = to_object(word), group = "Bilingual") %>%
+  filter(object %in% shared_objects) %>%
+  select(Participant, group, object, quiet_noise, corrected_acc)
+
+m_matched <- mcorr_clean %>%
+  mutate(word = str_remove(Trial.Type, "^(quiet|noise)_"),
+         object = to_object(word), group = "Monolingual") %>%
+  filter(object %in% shared_objects) %>%
+  select(Participant, group, object, quiet_noise, corrected_acc)
+
+matched <- bind_rows(b_matched, m_matched) %>%
+  mutate(
+    group       = factor(group, levels = c("Monolingual", "Bilingual")),
+    quiet_noise = factor(quiet_noise, levels = c("Quiet", "Noise")),
+    object      = factor(object),
+    Participant = factor(Participant)
+  )
+
+cat("Rows:", nrow(matched),
+    "| Participants:", nlevels(matched$Participant),
+    "| Objects:", nlevels(matched$object), "\n")
+matched %>% distinct(Participant, group) %>% count(group)   # N per group
+```
+
+```{r combined-model}
+m_matched_mod <- lmer(
+  corrected_acc ~ group * quiet_noise + (1 | Participant) + (1 | object),
+  data = matched
+)
+summary(m_matched_mod)
+```
+
+```{r combined-emmeans}
+emm <- emmeans(m_matched_mod, ~ group * quiet_noise)
+emm                                   # four estimated cell means (vs 0 = no recognition)
+pairs(emm, simple = "group")          # Bilingual vs Monolingual, within each condition
+pairs(emm, simple = "quiet_noise")    # Quiet vs Noise, within each group
+```
+
+### Matched-object model with SES
+
+This is where group and SES are nearly confounded. Report both models and
+watch the `group` coefficient. The collinearity check and VIF quantify how
+separable the two are in this subset.
+
+```{r combined-mixed-ses}
+matched_ses <- matched %>%
+  mutate(Participant = clean_id(Participant)) %>%
+  left_join(ses, by = "Participant") %>%
+  filter(!is.na(parent_ed_z))
+
+matched_ses %>% distinct(Participant, group, parent_ed) %>%
+  group_by(group) %>%
+  summarise(n = n(), mean_ed = mean(parent_ed), sd_ed = sd(parent_ed),
+            min = min(parent_ed), max = max(parent_ed), .groups = "drop")
+
+c0 <- lmer(corrected_acc ~ group * quiet_noise + (1 | Participant) + (1 | object),
+           data = matched_ses)
+c1 <- lmer(corrected_acc ~ group * quiet_noise + parent_ed_z +
+             (1 | Participant) + (1 | object), data = matched_ses)
+
+summary(c1)
+anova(c0, c1)
+
+if (requireNamespace("car", quietly = TRUE)) car::vif(c1)
+```
+
+### Within-bilingual SES effect
+
+Does the Quiet–Noise gap shrink or grow with SES? (`quiet_noise:parent_ed_z`
+is the term of interest.)
+
+```{r ses-within-bilinguals}
+b_noise_ses <- lmer(corrected_acc ~ quiet_noise * parent_ed_z + language + (1 | Participant),
+                    data = b_ses_complete)
+summary(b_noise_ses)
+```
+
+# Habituation Task
+
+79 participants have habituation data (V1 and V2 points combined), all of whom
+habituated. We keep one point per participant, preferring V2 when present.
+
+```{r hab-build, include=FALSE}
+hab <- read.csv("hab.csv")
+
+hab_filtered <- hab %>%
+  mutate(
+    base_id = str_remove(Participant, "_V[12]$"),
+    visit   = if_else(str_detect(Participant, "_V2$"), 2, 1)
+  ) %>%
+  group_by(base_id) %>%
+  slice_max(visit, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+age  <- read.csv("age.csv")
+lena <- read.csv("lena.csv")
+mcdi <- read.csv("mcdi.csv")
+
+hab_filtered <- hab_filtered %>%
+  left_join(age,  by = "Participant") %>%
+  left_join(lena, by = "Participant") %>%
+  left_join(mcdi, by = "Participant") %>%
+  mutate(language = if_else(str_starts(base_id, "M"), "monolingual", "bilingual")) %>%
+  mutate(join_id = clean_id(Participant)) %>%              # SES join on normalized key
+  left_join(ses %>% rename(join_id = Participant), by = "join_id") %>%
+  select(-join_id)
+
+# age-group bins for plotting
+hab_filtered <- hab_filtered %>%
+  mutate(
+    age_group = case_when(
+      age >= 8  & age < 13 ~ "8-12.9",
+      age >= 13 & age < 19 ~ "13-18.9",
+      age >= 19 & age < 27 ~ "19-26.9",
+      TRUE ~ NA_character_
+    ),
+    age_group = factor(age_group, levels = c("8-12.9", "13-18.9", "19-26.9"))
+  )
+```
+
+## Missing Data
+
+```{r hab-missing-lena}
+# missing LENA
+hab_filtered %>% filter(is.na(noise_sum)) %>% pull(Participant)
+```
+
+```{r hab-missing-ses}
+# missing SES (expect the 5 known-missing: M43EW, B17YT, B23RF, B29NRP, B31ZR)
+hab_filtered %>% filter(is.na(parent_ed)) %>% pull(Participant)
+```
+
+## Age Distribution
+
+```{r hab-age-hist}
+ggplot(hab_filtered, aes(x = age)) +
+  geom_histogram(binwidth = 1) +
+  geom_rug() +
+  theme_classic()
+```
+
+## Regressions
+
+```{r hab-split, include=FALSE}
+bi   <- hab_filtered %>% filter(language == "bilingual")
+mono <- hab_filtered %>% filter(language == "monolingual")
+datasets <- list(full = hab_filtered, bilingual = bi, monolingual = mono)
+```
+
+### Baseline grid (no SES)
+
+```{r hab-grid}
+specs <- crossing(
+  outcome = c("nov_score", "hab_trials", "nov1"),
+  nesting(
+    predictor = c("age * language", "tv", "noise_sum"),
+    sample    = c("full", "bilingual", "monolingual")
+  )
+)
+
+results <- specs %>%
+  mutate(fit = pmap(list(outcome, predictor, sample),
+                    \(o, p, s) lm(reformulate(p, response = o), data = datasets[[s]]))) %>%
+  mutate(tidied = map(fit, tidy)) %>%
+  unnest(tidied) %>%
+  select(-fit)
+
+results %>% filter(term != "(Intercept)") %>% arrange(p.value)
+```
+
+### SES-augmented grid
+
+Every predictor crossed with every sample (dropping language terms in
+single-group samples). `n_used` tracks how SES missingness shrinks each model.
+
+```{r hab-grid-ses}
+specs_ses <- crossing(
+  outcome   = c("nov_score", "hab_trials", "nov1"),
+  predictor = c("age * language", "tv", "noise_sum",
+                "parent_ed_z",
+                "age * language + parent_ed_z",
+                "tv + parent_ed_z",
+                "noise_sum + parent_ed_z"),
+  sample    = c("full", "bilingual", "monolingual")
+) %>%
+  filter(!(str_detect(predictor, "language") & sample != "full"))
+
+results_ses <- specs_ses %>%
+  mutate(fit = pmap(list(outcome, predictor, sample),
+                    \(o, p, s) lm(reformulate(p, response = o), data = datasets[[s]]))) %>%
+  mutate(n_used = map_int(fit, ~nobs(.x)),
+         tidied = map(fit, tidy)) %>%
+  unnest(tidied) %>%
+  select(-fit)
+
+results_ses %>% filter(term != "(Intercept)") %>% arrange(p.value)
+```
+
+### Confirmatory model
+
+Pre-specified after the exploratory grid: full sample, SES entered as a
+covariate alongside the predictor of interest (tv). Report N explicitly.
+
+```{r hab-confirmatory}
+confirm_df <- hab_filtered %>%
+  filter(!is.na(nov_score), !is.na(tv), !is.na(age),
+         !is.na(language), !is.na(parent_ed_z))
+
+confirm_mod <- lm(nov_score ~ tv + age + language + parent_ed_z, data = confirm_df)
+
+summary(confirm_mod)
+tidy(confirm_mod, conf.int = TRUE)
+glance(confirm_mod)
+cat("N =", nobs(confirm_mod), "\n")
+```
+
+## Novelty Response Plots
+
+```{r hab-nov-box}
+ggplot(hab_filtered, aes(x = language, y = nov_score)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.7) +
+  labs(x = "Language Group", y = "Novelty Response Score",
+       title = "Novelty Response Scores by Language Group") +
+  theme_classic()
+```
+
+```{r hab-nov-age}
+ggplot(hab_filtered, aes(x = age, y = nov_score, color = language)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "Age (months)", y = "Novelty Response Score", color = "Language Group") +
+  theme_classic()
+```
+
+```{r hab-nov-agegroup}
+ggplot(hab_filtered, aes(x = age_group, y = nov_score, color = language)) +
+  geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+              alpha = 0.7) +
+  labs(x = "Age Group (months)", y = "Novelty Response Score", color = "Language Group") +
+  theme_classic()
+```
+
+## Habituation + LENA Plots
+
+```{r hab-lena-noise}
+ggplot(hab_filtered, aes(x = noise_sum, y = nov_score, color = language)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "LENA Total Noise", y = "Novelty Response Score", color = "Language Group") +
+  theme_classic()
+```
+
+```{r hab-lena-tv}
+ggplot(hab_filtered, aes(x = tv, y = nov_score, color = language)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "LENA TV Noise", y = "Novelty Response Score", color = "Language Group") +
+  theme_classic()
+```
+
+<!--
+# Parked / not run
+The chunks below reference objects (imputed_b, imputed_m) that are not built
+in this pipeline. They are kept for reference but set eval=FALSE so they never
+break the render. Restore them by supplying the imputed data and flipping eval.
+
+```{r parked-imputed-b, eval=FALSE, include=FALSE}
+acc_b <- imputed_b %>%
+  group_by(Participant, quiet_noise) %>%
+  summarize(Accuracy = mean(Type.Accuracy, na.rm = TRUE), .groups = "drop")
+
+diff_b <- acc_b %>%
+  pivot_wider(names_from = quiet_noise, values_from = Accuracy) %>%
+  mutate(NoiseDrop = Quiet - Noise) %>%
+  arrange(desc(NoiseDrop))
+```
+
+```{r parked-imputed-m, eval=FALSE, include=FALSE}
+acc_m <- imputed_m %>%
+  group_by(Participant, quiet_noise) %>%
+  summarize(Accuracy = mean(Type.Accuracy, na.rm = TRUE), .groups = "drop")
+
+diff_m <- acc_m %>%
+  pivot_wider(names_from = quiet_noise, values_from = Accuracy) %>%
+  mutate(NoiseDrop = Quiet - Noise) %>%
+  arrange(desc(NoiseDrop))
+```
+-->
