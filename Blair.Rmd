@@ -7,18 +7,6 @@ Looking at performance - making 3 cleaned datasets, bilingual, monolingual, and 
 
 ```{r setup, include=FALSE}
 
-install.packages("usethis")
-library(usethis)
-
-create_github_token()
-
-install.packages("gitcreds")
-library(gitcreds)
-
-gitcreds_set()
-
-#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
-
 library(tidyr)
 library(dplyr)
 
