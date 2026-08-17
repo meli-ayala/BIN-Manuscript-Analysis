@@ -1,0 +1,255 @@
+---
+title: "Blair Bin"
+output: pdf_document
+date: "2026-08-17"
+---
+Looking at performance - making 3 cleaned datasets, bilingual, monolingual, and all
+
+```{r setup, include=FALSE}
+
+library(tidyr)
+library(dplyr)
+
+LENA <- read.csv("lena.csv")
+
+LENA <- LENA %>%
+  rename(
+    Noise = noise_sum,
+    ID = Participant
+  )
+
+LENA <- LENA[, c("ID", "Noise")]
+
+LENA <- LENA %>%
+  mutate(
+    base_id = sub("_V2$", "", ID)
+  ) %>%
+  group_by(base_id) %>%
+  filter(
+    !(!grepl("_V2$", ID) & any(grepl("_V2$", ID)))
+  ) %>%
+  ungroup() %>%
+  select(-base_id)
+
+LENA <- LENA %>%
+  mutate(ID = sub("_V2$", "", ID))
+
+HABIT <- read.csv("hab.csv")
+
+#I used Nov1 I think this is what we did before
+
+HABIT <- HABIT %>%
+  rename(
+    Novelty = nov_score,
+    ID = Participant
+  )
+
+HABIT <- HABIT[, c("ID", "Novelty")]
+
+HABIT <- HABIT %>%
+  mutate(
+    base_id = sub("_V2$", "", ID)
+  ) %>%
+  group_by(base_id) %>%
+  filter(
+    !(!grepl("_V2$", ID) & any(grepl("_V2$", ID)))
+  ) %>%
+  ungroup() %>%
+  select(-base_id)
+
+HABIT <- HABIT %>%
+  mutate(ID = sub("_V2$", "", ID))
+
+MCDI <- read.csv("mcdi.csv")
+
+MCDI <- MCDI %>%
+  rename(
+    MCDI = mcdi,
+    ID = Participant
+  )
+
+MCDI <- MCDI %>%
+  mutate(
+    base_id = sub("_V2$", "", ID)
+  ) %>%
+  group_by(base_id) %>%
+  filter(
+    !(!grepl("_V2$", ID) & any(grepl("_V2$", ID)))
+  ) %>%
+  ungroup() %>%
+  select(-base_id)
+
+MCDI <- MCDI %>%
+  mutate(ID = sub("_V2$", "", ID))
+
+#Now the eye-gaze
+
+bilingual <- read.csv("bwindow.csv", na.strings = c("", "NA"))
+
+bilingual <- bilingual[!grepl("baseline_[0-9]+", bilingual$Trial.Type), ]
+
+bilingual$Condition <- ifelse(
+  grepl("quiet", bilingual$Trial.Type, ignore.case = TRUE),
+  "quiet",
+  ifelse(
+    grepl("noise", bilingual$Trial.Type, ignore.case = TRUE),
+    "noise",
+    NA
+  )
+)
+
+bilingual <- bilingual %>%
+  mutate(
+    Trial.Type = sub("^(quiet_|noise_)", "", Trial.Type)
+  )
+
+bilingual <- bilingual %>%
+  rename(
+    Target = Trial.Type,
+    Accuracy = Trial.Accuracy,
+    ID = Participant
+  )
+
+bilingual <- bilingual %>%
+  select(-Trial.Number, -Frames.to.Target, -Frames.to.Distractor, -X)
+
+bilingual <- bilingual %>%
+  filter(!is.na(ID))
+
+bilingual <- bilingual %>%
+  filter(!is.na(Accuracy))
+
+bilingual  <- left_join(
+ bilingual,
+  LENA,
+  by = "ID"
+)
+
+bilingual  <- left_join(
+ bilingual,
+  HABIT,
+  by = "ID"
+)
+
+bilingual  <- left_join(
+ bilingual,
+  MCDI,
+  by = "ID"
+)
+
+bilingual$Language <- "Bilingual"
+
+#Cleaning Monolingual
+
+monolingual <- read.csv("mwindow.csv")
+
+monolingual <- monolingual[!grepl("baseline_[0-9]+", monolingual$Trial.Type), ]
+
+monolingual$Condition <- ifelse(
+  grepl("quiet", monolingual$Trial.Type, ignore.case = TRUE),
+  "quiet",
+  ifelse(
+    grepl("noise", monolingual$Trial.Type, ignore.case = TRUE),
+    "noise",
+    NA
+  )
+)
+
+monolingual <- monolingual %>%
+  mutate(
+    Trial.Type = sub("^(quiet_|noise_)", "", Trial.Type)
+  )
+
+monolingual <- monolingual %>%
+  rename(
+    Target = Trial.Type,
+    Accuracy = Trial.Accuracy,
+    ID = Participant
+  )
+
+monolingual <- monolingual %>%
+  select(-Trial.Number, -Frames.to.Target, -Frames.to.Distractor, -X)
+
+monolingual <- monolingual %>%
+  filter(!is.na(ID))
+
+monolingual <- monolingual %>%
+  filter(!is.na(Accuracy))
+
+monolingual$Language <- "Monolingual"
+
+monolingual  <- left_join(
+ monolingual,
+  LENA,
+  by = "ID"
+)
+
+monolingual  <- left_join(
+ monolingual,
+  HABIT,
+  by = "ID"
+)
+
+monolingual  <- left_join(
+ monolingual,
+  MCDI,
+  by = "ID"
+)
+
+all <- rbind(bilingual, monolingual)
+
+```
+
+Bilingual analysis
+
+```{r cars}
+
+biling_acc <- bilingual %>%
+  group_by(Condition) %>%
+  summarise(
+    mean_accuracy = mean(Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+print(biling_acc)
+
+#avg for both is .52
+#not running on that
+
+b_noise <- lmer(Novelty ~ Noise + (1|ID),
+                data = bilingual, REML = FALSE)
+#errored out
+
+summary(b_noise)
+VarCorr(b_noise)
+#highly correlated
+isSingular(b_noise)
+#not singular
+
+lm_biling <- lm(Novelty ~ Noise, data = bilingual)
+
+summary(lm_biling)
+
+#nothing - ran it with nov1 and nov_score from original document
+
+lm_biling_mcdi <- lm(MCDI ~ Noise, data = bilingual)
+
+summary(lm_biling_mcdi)
+
+#nope
+
+```
+
+## Comparisons
+
+```{r pressure, echo=FALSE}
+
+monovbiling <- lmer(Accuracy ~ Condition * Language + (1|ID),
+                data = all, REML = FALSE)
+
+summary(monovbiling)
+
+#if i add anything else it is singular
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
