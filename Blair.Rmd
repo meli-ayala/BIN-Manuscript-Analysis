@@ -10,6 +10,7 @@ Looking at performance - making 3 cleaned datasets, bilingual, monolingual, and 
 library(tidyr)
 library(dplyr)
 
+
 LENA <- read.csv("lena.csv")
 
 LENA <- LENA %>%
@@ -18,7 +19,11 @@ LENA <- LENA %>%
     ID = Participant
   )
 
-LENA <- LENA[, c("ID", "Noise")]
+LENA$Total <- LENA$Noise + LENA$distant
+
+LENA$Total_z <- as.numeric(scale(LENA$Total))
+
+LENA <- LENA[, c("ID", "Total", "Total_z")]
 
 LENA <- LENA %>%
   mutate(
@@ -36,15 +41,29 @@ LENA <- LENA %>%
 
 HABIT <- read.csv("hab.csv")
 
-#I used Nov1 I think this is what we did before
+HABIT <- HABIT %>%
+  mutate(
+    last_hab = coalesce(hab8, hab7, hab6, hab5, hab4, hab3),
+    Novelty = nov1 - last_hab
+  )
 
 HABIT <- HABIT %>%
   rename(
-    Novelty = nov_score,
     ID = Participant
   )
 
-HABIT <- HABIT[, c("ID", "Novelty")]
+HABIT$nov_score_z <- as.numeric(scale(HABIT$nov_score))
+
+HABIT$Novelty_z <- as.numeric(scale(HABIT$Novelty))
+
+HABIT <- HABIT %>%
+  mutate(
+    Recovery = case_when(
+      Novelty > 0.548 ~ "recoverer",
+      Novelty < 0.548 ~ "nonrecoverer",
+      Novelty == 0.548 ~ "nonrecoverer"
+    )
+  )
 
 HABIT <- HABIT %>%
   mutate(
@@ -60,6 +79,31 @@ HABIT <- HABIT %>%
 HABIT <- HABIT %>%
   mutate(ID = sub("_V2$", "", ID))
 
+HABIT_L <- HABIT %>%
+  pivot_longer(
+    cols = hab1:hab8,
+    names_to = "Trial",
+    values_to = "Habituation",
+    values_drop_na = TRUE
+  )
+
+HABIT_L$Habituation_z <- as.numeric(scale(HABIT_L$Habituation))
+
+
+#computed by dividing the amount of looking time during 1st novel test trial by amount #of total time looking during 1st novel plus first familiar test trials)
+
+#scores above .548 considered "Recoverers and below .548 are non-recoverers
+
+#See p. 361 of Shaddy & Colombo 2004 paper
+
+
+#I used novelty response score - and then also a column for "recoverer" and "nonrecoverer" 
+
+#NOTE - .548 is a nonrecoverer
+
+HABIT_L <- HABIT_L[, c("ID", "Novelty", "Novelty_z", "Recovery", "Trial", "Habituation", "Habituation_z")]
+
+
 MCDI <- read.csv("mcdi.csv")
 
 MCDI <- MCDI %>%
@@ -67,6 +111,8 @@ MCDI <- MCDI %>%
     MCDI = mcdi,
     ID = Participant
   )
+
+MCDI$MCDI_z <- as.numeric(scale(MCDI$MCDI))
 
 MCDI <- MCDI %>%
   mutate(
@@ -119,25 +165,34 @@ bilingual <- bilingual %>%
 bilingual <- bilingual %>%
   filter(!is.na(Accuracy))
 
-bilingual  <- left_join(
- bilingual,
-  LENA,
+###AS ACCURACY IS NOTHING I AM NOT JOINING IT TO THE DATASET IT MAKES LOOK AT HAB HARD
+
+set  <- left_join(
+ LENA,
+  HABIT_L,
   by = "ID"
 )
 
-bilingual  <- left_join(
- bilingual,
-  HABIT,
-  by = "ID"
-)
-
-bilingual  <- left_join(
- bilingual,
+set  <- left_join(
+set,
   MCDI,
   by = "ID"
 )
 
-bilingual$Language <- "Bilingual"
+set <- set %>%
+  mutate(
+    Language = case_when(
+      startsWith(ID, "M") ~ "Monolingual",
+      startsWith(ID, "B") ~ "Bilingual",
+      TRUE ~ NA_character_
+    )
+  )
+
+biling_set <- set %>%
+  filter(Language == "Bilingual")
+
+monoling_set <- set %>%
+  filter(Language == "Monolingual")
 
 #Cleaning Monolingual
 
@@ -176,33 +231,68 @@ monolingual <- monolingual %>%
 monolingual <- monolingual %>%
   filter(!is.na(Accuracy))
 
-monolingual$Language <- "Monolingual"
-
-monolingual  <- left_join(
- monolingual,
-  LENA,
-  by = "ID"
-)
-
-monolingual  <- left_join(
- monolingual,
-  HABIT,
-  by = "ID"
-)
-
-monolingual  <- left_join(
- monolingual,
-  MCDI,
-  by = "ID"
-)
-
-all <- rbind(bilingual, monolingual)
+#Same as bilingual = ignoring accuracy
 
 ```
 
 Bilingual analysis
 
 ```{r cars}
+
+library(lme4)
+install.packages("lmerTest")
+library(lmerTest)
+
+#this is what i want but it is too complex
+
+b_model_hab <- lmer(
+  Habituation_z ~ Total_z + (1 + Trial | ID),
+  data = biling_set,
+  REML = FALSE
+)
+
+#simplifying
+
+#trial is giving me a headache
+
+biling_set <- biling_set%>%
+  mutate(
+    Trial_num = as.numeric(gsub("hab", "", Trial))
+  )
+
+b_model_hab <- lmer(
+  Habituation_z ~ Total_z * Trial_num + (1 | ID),
+  data = biling_set,
+  REML = TRUE
+)
+
+summary(b_model_hab)
+
+#nothing
+
+#back to lms
+
+names(biling_set)
+
+b_set <- biling_set %>%
+  pivot_wider(
+    id_cols = c(ID, Total, Total_z, Novelty, Novelty_z, Recovery, MCDI, MCDI_z, Language),
+    names_from = Trial,
+    values_from = Habituation
+  )
+
+b_set <- b_set[-c(9, 26), ]
+
+
+lm_biling_hab <- lm(Novelty_z~ Total_z, data = b_set)
+
+summary(lm_biling_hab)
+
+#nothinggggg
+
+
+
+
 
 biling_acc <- bilingual %>%
   group_by(Condition) %>%
@@ -212,12 +302,48 @@ biling_acc <- bilingual %>%
   )
 print(biling_acc)
 
-#avg for both is .52
+#avg for both is .518
 #not running on that
 
-b_noise <- lmer(Novelty ~ Noise + (1|ID),
-                data = bilingual, REML = FALSE)
-#errored out
+#Novelty response by noise in home
+
+#is 16 bilinguals correct?
+
+bilingual_short<- bilingual %>%
+  distinct(ID, Novelty_z, Total_z, MCDI_z, Recovery, Total, Language)
+
+#assessing missing data
+
+sapply(bilingual_short[, c("ID", "Novelty_z", "Total_z")],
+       function(x) mean(is.na(x)) * 100)
+
+#       ID Novelty_z   Total_z 
+#        0        12        28 
+
+
+#the way we are looking at this requires a short dataset - thus 1 obs per participant, no Random effect, running an lm
+
+b_noise <- lm(Novelty_z ~ Total_z,
+                data = bilingual_short)
+
+summary(b_noise)
+
+#nothing
+
+#errors from the lmer that bolster reasoning below
+
+#Warning: convergence code -4 from nloptwrap: NLOPT_ROUNDOFF_LIMITED: Roundoff errors #led to a breakdown of the optimization algorithm. In this case, the returned minimum #may still be useful. (e.g. this error occurs in NEWUOA if one tries to achieve a #tolerance too close to machine precision.)
+##errored out
+
+summary(b_noise)
+VarCorr(b_noise)
+#HIGHLY CORRELATED
+  #TEA - we may want to look into z-scoring
+isSingular(b_noise)
+#Not singular so there is enough data
+#z score is appropriate when 2 continuous predictors are NOT on the same scale
+#Z scoring is helpful bc it creates numerical stability and interpretation when 2 continuous variables are on wildly different scales (i.e., Novelty response from 0 -1.o and Total % noise in the home from 1 - 100)
+#I am now adding z scores for all items bc they are all on totally different scales
 
 summary(b_noise)
 VarCorr(b_noise)
@@ -225,17 +351,23 @@ VarCorr(b_noise)
 isSingular(b_noise)
 #not singular
 
-lm_biling <- lm(Novelty ~ Noise, data = bilingual)
-
-summary(lm_biling)
-
-#nothing - ran it with nov1 and nov_score from original document
-
-lm_biling_mcdi <- lm(MCDI ~ Noise, data = bilingual)
+lm_biling_mcdi <- lm(MCDI_z ~ Total_z, data = bilingual)
 
 summary(lm_biling_mcdi)
 
 #nope
+
+bilingual_short$Recovery <- as.factor(bilingual_short$Recovery)
+
+recovery_b <- lm(
+  Total ~ Recovery,
+  data = bilingual_short
+)
+
+summary(recovery_b)
+
+#NOTHING
+
 
 ```
 
@@ -243,12 +375,37 @@ summary(lm_biling_mcdi)
 
 ```{r pressure, echo=FALSE}
 
-monovbiling <- lmer(Accuracy ~ Condition * Language + (1|ID),
-                data = all, REML = FALSE)
+#Jk monolingual first
+
+monoling_acc <- monolingual %>%
+  group_by(Condition) %>%
+  summarise(
+    mean_accuracy = mean(Accuracy, na.rm = TRUE),
+    .groups = "drop"
+  )
+print(monoling_acc)
+
+#.585 in noise and .550 in quiet??????
+
+
+monolingual_short<-monolingual %>%
+  distinct(ID, Novelty_z, Total_z, MCDI_z, Recovery, Total, Language)
+
+all_short <- rbind(bilingual_short, monolingual_short)
+
+monovbiling <- lm(MCDI_z ~ Total_z * Language,
+                data = all_short)
 
 summary(monovbiling)
 
-#if i add anything else it is singular
+#Approach sig for that monolinguals have higher english vocabs than bilinguals have Spanish vocabs - monolingual comps
+
+monovbiling_2 <- lm(Novelty_z ~ Total_z * Language,
+                data = all_short)
+
+summary(monovbiling_2)
+
+#nothing
 
 ```
 
